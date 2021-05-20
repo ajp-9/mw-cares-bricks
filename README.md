@@ -1,5 +1,5 @@
 # M-W Cares Bricks
-While in the Computer Club I made a website to view all of the M-W Cares bricks from a virtual space.
+While in the Computer Club at my high school I made a dynamic website from the ground up with NodeJS to view the M-W Cares bricks, virtually.
 
 The site is designed to run on replit.com
 
