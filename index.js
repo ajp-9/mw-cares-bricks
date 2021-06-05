@@ -1,19 +1,23 @@
-'use strict'
+'use strict'; // I don't want any js quirks
 
 /* Required Packages */
 const express  = require("express")
-const http = require('https');
 const request = require('request')
 const fs = require("fs")
 const path = require('path')
-const XLSX = require('xlsx') // https://github.com/SheetJS/sheetjs
+const XLSX = require('xlsx') // Documentation: https://github.com/SheetJS/sheetjs
 
 setupPyFormat()
 
+// Google sheet needs to be viewable for the public
+// The sheet tab that you want to read NEEDS to be the first one in the google sheets
+const google_sheet_id = "1EzyQ7VwMqDmtv3Guzs0PwR-_V6PycPR9PCxdgBTm5C4"
+
+// Array of all the bricks being used currently
 let allBricks = []
 
 class Brick {
-	constructor(section, size, number, sponsor, dedication) {
+	constructor(section, size, number, sponsor, dedication, timestamp) {
 		this.section = section
 
     // "Translate" sizes
@@ -26,9 +30,10 @@ class Brick {
 		else
 			this.size = size
 			
-		this.number = number
+		this.number = number // Brick number
 		this.sponsor = sponsor
 		this.dedication = dedication
+    this.timestamp = timestamp // (For duplicates)
 
     this.id = this.section + this.size + this.number
 	}
@@ -39,62 +44,109 @@ class Brick {
 */
 
 const app = express()
-const port = 80
+const port = 80 // Default port for HTTP
 
+// Serving the static site, without .html extensions
 app.use(express.static(path.join(__dirname, "Website"), {index: "index.html", extensions:["html"]}))
 
 app.listen(port, () => {
-	console.log("Example app listening at http://localhost:{port}".format({port: port}))
+	console.log("Website listening at http://localhost:{port}".format({port: port}))
 })
 
+
 /*
-** Periodically downloading google sheets & updating website
+** Periodically downloading google sheets & then updating website
 */
 
-// The sheet that you want to read NEEDS to be the first one
-const google_sheet_id = "1fcKhRxRhF7vuqle7uSEYNV7x6XFNQjOHNhHbFIPEZFE"
-
 function download_n_build() {
-  request.head(`https://docs.google.com/spreadsheets/d/${google_sheet_id}/export?format=xlsx`, function(err, res, body) {
-    request(`https://docs.google.com/spreadsheets/d/${google_sheet_id}/export?format=xlsx`)
-    .pipe(fs.createWriteStream("Data/database.xlsx"))
-    .on('close', () => { buildWebsite() }) // When its done downloading file build website
-  })
+  try {
+    allBricks = [] // Resetting before downloading & building
+
+    request.head(`https://docs.google.com/spreadsheets/d/${google_sheet_id}/export?format=xlsx`, function(err, res, body) {
+      request(`https://docs.google.com/spreadsheets/d/${google_sheet_id}/export?format=xlsx`)
+      .pipe(fs.createWriteStream("Data/database.xlsx"))
+      .on('close', () => { buildWebsite() }) // When its done downloading file build website
+    })
+
+    console.log("Updated xlsx Sheet & Built Website")
+    
+  } catch(error) {
+
+    console.log("Error: {Error}".format({Error: error}))
+  }
 }
 
+// When server is turned on, download data & build site (b/c its not done immediately by the setInterval() function)
+
+download_n_build()
+
+// Function that runs every so often
 setInterval(function () {
   download_n_build()
-
-  console.log("Updated xlsx Sheet & Built Website")
-}, 1000 * 60 * 60 * 6) // Last num is hour(s)
-
-// When server is turned on, download data & build site
-download_n_build()
+}, (1000 * 60) * 15) // Last num is amount of minutes until updated again
 
 /*
 ** Build the Website's Main Page
 */
 
+// Sets the main bricks array from any xlsx file
+// **Only reads the first sheet in the xlsx file**
 function setAllBricksFromXLSX(file_location) {
-	allBricks = []
+  let new_AllBricks = []
 
 	let sheet = XLSX.readFile(file_location);
 	let sheetJSON = XLSX.utils.sheet_to_json(sheet.Sheets[sheet.SheetNames[0]])
 	sheetJSON.forEach(brick => {
-		allBricks.push(new Brick(brick.Section, brick.Location, brick.Brick, brick.Sponsor, brick.Dedication))
+		allBricks.push(new Brick(brick.Section, brick.Size, brick.Number, brick.Sponsor, brick.Dedication, brick.Timestamp))
 	})
+
+  // Looks for duplicates, the brick with the higher priority number will be the one used
+  allBricks.forEach(function(currentBrick) {
+    let duplicateBricks = [] // Array of duplicateBricks
+    duplicateBricks.push(currentBrick)
+    //console.log(currentBrick.timestamp + " : " + currentBrick.sponsor)
+
+    allBricks.forEach(function(lookedAtBrick) {
+      if (currentBrick.section == lookedAtBrick.section && currentBrick.size == lookedAtBrick.size && currentBrick.number == lookedAtBrick.number)
+      {
+        if (currentBrick.sponsor != lookedAtBrick.sponsor || currentBrick.dedication != lookedAtBrick.dedication)
+        {
+          duplicateBricks.push(lookedAtBrick)
+        }
+      }
+    })
+
+    if (duplicateBricks.length > 1) {
+      duplicateBricks.sort(function(brick_A, brick_B) {
+          if (brick_A.timestamp > brick_B.timestamp) {
+            return -1;
+          }
+          if (brick_B.timestamp > brick_A.timestamp) {
+            return 1;
+          }
+        
+          return 0; // If they are equal
+      })
+    }
+
+    new_AllBricks.push(duplicateBricks[0]) // Only puts the largest priority brick
+  })
+
+  allBricks = new_AllBricks
 }
 
+// Old functions
 /*function setAllBricksFromJSON(file_location) {
 	allBricks = []
 	
 	allBricks = JSON.parse(fs.readFileSync(file_location, "utf-8"))
-}*/
+}
 
 function exportBricksToJSON(new_file_location) {
 	fs.writeFileSync(new_file_location, JSON.stringify(allBricks))
-}
+}*/
 
+// Returns all the bricks in array with the specific section & size
 function viewBricks(section, size) {
 	let finalBricks = []
 
@@ -106,6 +158,7 @@ function viewBricks(section, size) {
 	return finalBricks
 }
 
+// Returns a specfic brick in a view with the number/id
 function getSpecificBrick(view, number) {
 	let output
 	view.forEach(brick => { if(brick.number == number) output = brick; return; })
@@ -119,6 +172,7 @@ function getSpecificBrick(view, number) {
   return output
 }
 
+// The order the css grid puts the outer bricks is different than what the spreadsheet uses
 function getOuterBrickOldNumber(number) {
 	if (number <= 10)
 		return number
@@ -176,13 +230,12 @@ function getOuterBrickOldNumber(number) {
 		return 19
 }
 
-function isEven(number) { return number % 2 == 0 ? true : false }
-
 /*
 ** Build Website
 */
 
 function buildWebsite() {
+  // Sets the global brick array from the xlsx sheet
 	setAllBricksFromXLSX("Data/database.xlsx")
 	let website_template_HTML = fs.readFileSync("Data/index.template.html", "utf-8")
 
@@ -216,6 +269,22 @@ function buildWebsite() {
   </div>
   `)
 
+  // To add more brick groups you need to call buildBrickGroup()
+  // w/ the ID/name of the group
+  // & then add it to the template file
+
+  // A & B are extra/example groups
+	//let A_Section_HTML = buildBrickGroup("A")
+	let P_Section_HTML = buildBrickGroup("P")
+	let W_Section_HTML = buildBrickGroup("W")
+	let G_Section_HTML = buildBrickGroup("G")
+	//let B_Section_HTML = buildBrickGroup("B")
+
+	fs.writeFileSync("Website/index.html", website_template_HTML.format({P_GroupBricks: P_Section_HTML, W_GroupBricks: W_Section_HTML, G_GroupBricks: G_Section_HTML/*, A_GroupBricks: A_Section_HTML, B_GroupBricks: B_Section_HTML*/}))
+
+  /*
+  ** Website Builder Functions
+  */
 	function buildBrickGroup(section) {
 		let finalGroup = (
     `
@@ -230,6 +299,7 @@ function buildWebsite() {
 		function buildInnerBricks() {
 			if(section != "W") {
 				let was_last_sm = false
+        
 				function buildRow(iteration, md_bricks, sm_bricks) {
 					let finalRow = "<tr>{Top}</tr> <tr>{Bottom}</tr>"
 		
@@ -239,7 +309,7 @@ function buildWebsite() {
 					let md_iter = 1
 					let sm_iter = 1
 		
-          // Iterate thru all 12 rows
+          // Iterate thru all 12 rows of the inner bricks
 					for (let i = 1; i <= 12; i++) {
 						if(!was_last_sm) {
 							let tmp_md = getSpecificBrick(md_bricks, md_iter + iteration * 6)
@@ -272,11 +342,13 @@ function buildWebsite() {
 		
 				let innerBricks_tmp = ""
 		
+        // append each row on the main inner bricks output HTML
 				for (let i = 0; i < 12; i++)
 					innerBricks_tmp += buildRow(i, md_bricks, sm_bricks)
 					
 				return innerBricks_tmp
 			} else {
+        // If the group is W, return an img instead of the inner brick table
 				return (
         `
         <div class="cares-logo">
@@ -299,6 +371,7 @@ function buildWebsite() {
 			return finalOuterBricks
 		}
 
+    // If the section is the middle (where the logo is), then usr this layout:
 		if(section == "W")
 			finalGroup = (
       `
@@ -314,28 +387,14 @@ function buildWebsite() {
 
 		return finalGroup
 	}
-
-  // To add more brick groups you need to call buildBrickGroup()
-  // w/ the ID/name of the group 
-  // & then add it to the template file
-
-	//let A_Section_HTML = buildBrickGroup("A")
-	let P_Section_HTML = buildBrickGroup("P")
-	let W_Section_HTML = buildBrickGroup("W")
-	let G_Section_HTML = buildBrickGroup("G")
-	//let B_Section_HTML = buildBrickGroup("B")
-
-	fs.writeFileSync("Website/index.html", website_template_HTML.format({P_GroupBricks: P_Section_HTML, W_GroupBricks: W_Section_HTML, G_GroupBricks: G_Section_HTML/*, A_GroupBricks: A_Section_HTML, B_GroupBricks: B_Section_HTML*/}))
 }
-
-buildWebsite()
 
 /*
 ** END SOURCE -----------------------
 */
 
 /*
-** hacky fix:
+** Hacky fix:
 **
 ** Needed to copy & paste an external module here for formatting b/c something's wrong with replit's module system itself
 */
